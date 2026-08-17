@@ -1,0 +1,14 @@
+# Logs (reales o de muestra) - NUNCA en la imagen
+data/
+
+# No hace falta en el build
+.git
+.gitignore
+.github
+README.md
+docs/
+preview.html
+.venv
+__pycache__
+*.pyc
+scripts

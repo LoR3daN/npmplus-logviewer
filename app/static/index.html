@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NPMplus · Access log viewer</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">◧</span>
+    <div>
+      <h1>NPMplus · Access log viewer</h1>
+      <span class="muted" id="scanInfo">—</span>
+    </div>
+  </div>
+  <div class="header-actions">
+    <button id="btnReload" title="Rescan logs now">↻</button>
+    <button id="btnMode" hidden>Switch to 3D</button>
+    <button id="btnApply" class="active" hidden>Apply table filters: ON</button>
+    <button id="btnView" class="ghost" title="Toggle map / table">Map</button>
+    <button id="btnSimplified" class="ghost active" title="Collapse repeated requests from the same IP and domain">Simplified</button>
+    <label class="switch" title="Auto refresh">
+      <input type="checkbox" id="live" checked>
+      <span class="slider"></span>
+    </label>
+    <span class="live-label">Live</span>
+  </div>
+</header>
+
+<section class="view-table" id="viewTable">
+
+<section class="cards" id="cards"></section>
+
+<section class="filters">
+  <div class="row">
+    <div class="msels" id="filtersMulti"></div>
+  </div>
+  <div class="row">
+    <label>IP
+      <input id="fIp" type="text" placeholder="contains…" autocomplete="off">
+    </label>
+    <label>Search
+      <input id="fQ" type="text" placeholder="path / UA / host…" autocomplete="off">
+    </label>
+    <label class="check">
+      <input id="fHideUptime" type="checkbox"> Hide Uptime-Kuma
+    </label>
+    <label class="check">
+      <input id="fHideLocal" type="checkbox"> Hide local IPs
+    </label>
+  </div>
+  <div class="row">
+    <label>From
+      <input id="fFrom" type="datetime-local">
+    </label>
+    <label>To
+      <input id="fTo" type="datetime-local">
+    </label>
+    <button id="btnClear" class="ghost">Clear filters</button>
+  </div>
+</section>
+
+<section class="table-wrap">
+  <table>
+    <thead><tr id="tableHead"></tr></thead>
+    <tbody id="logBody"></tbody>
+  </table>
+  <div class="empty" id="empty" hidden>No results with the current filters.</div>
+</section>
+
+<footer class="pagination">
+  <button id="prevPage" class="ghost">«</button>
+  <span id="pageInfo"></span>
+  <button id="nextPage" class="ghost">»</button>
+  <label>Rows
+    <select id="pageSize">
+      <option value="25">25</option>
+      <option value="50" selected>50</option>
+      <option value="100">100</option>
+      <option value="200">200</option>
+    </select>
+  </label>
+</footer>
+
+</section>
+
+<section class="view-map" id="viewMap" hidden>
+  <div id="map2d"></div>
+  <div id="globe3d"></div>
+
+  <div class="panel" id="mfeed">
+    <h2>Live feed <span class="live">● LIVE</span></h2>
+    <div id="mfeedList"></div>
+  </div>
+
+  <div class="panel" id="mstats">
+    <h2>Requests</h2>
+    <div class="req-grid">
+      <div class="req-cell"><span class="l">Total</span><span class="v" id="mTotal">0</span></div>
+      <div class="req-cell"><span class="l">Countries</span><span class="v" id="mCountries">0</span></div>
+      <div class="req-cell"><span class="l">IPs</span><span class="v" id="mIps">0</span></div>
+    </div>
+    <h2>Status distribution</h2>
+    <div id="mstatusbar"></div>
+    <div class="st-leg"><span class="s2" id="m2">2xx 0</span><span class="s3" id="m3">3xx 0</span><span class="s4" id="m4">4xx 0</span><span class="s5" id="m5">5xx 0</span></div>
+    <h2>Request rate <span class="rate" id="mRate">0 req/h</span></h2>
+    <svg id="mspark" viewBox="0 0 100 38" preserveAspectRatio="none"></svg>
+    <h2>Top origins</h2>
+    <div id="mOrigins"></div>
+    <h2>Top IPs</h2>
+    <div id="mIpTop"></div>
+  </div>
+
+  <div id="status"></div>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/three@0.157.0/build/three.min.js"></script>
+<script src="https://unpkg.com/globe.gl@2.31.0/dist/globe.gl.min.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/map.js"></script>
+</body>
+</html>

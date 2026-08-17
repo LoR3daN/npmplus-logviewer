@@ -1,0 +1,14 @@
+# Logs (real or sample) - never upload
+data/
+
+# Generated
+preview.html
+__pycache__/
+*.pyc
+.venv/
+
+# System
+.DS_Store
+
+# Map demo - not uploaded
+**/map-demo.html

@@ -1,0 +1,32 @@
+# NPMplus Access log viewer
+#
+# Add this service to the docker-compose file of your NPMplus project, or run
+# this file on its own with `docker compose up -d`.
+#
+# The web app has no built-in login. If you expose it through a domain, protect
+# it with an Access List (or Basic Auth) on the NPMplus proxy host.
+
+services:
+  logviewer:
+    container_name: logviewer
+    image: ghcr.io/lor3dan/npmplus-logviewer:latest
+    restart: unless-stopped
+    # host networking is used so the app can read the NPMplus log files and
+    # listen on the same interface without extra port mappings.
+    network_mode: host
+    environment:
+      - "TZ=Europe/Madrid"
+      # Optional: hosts to show as chips on the Requests card (comma separated).
+      # Empty = top 6 hosts automatically.
+      # - "CARDS_HOSTS=cloud.example.com,jellyfin.example.com,immich.example.com"
+      # Optional: force a public IP for the "my IP" chips.
+      # Empty = detected automatically (external API) and refreshed periodically.
+      # - "MY_IP=<your_public_ip>"
+    volumes:
+      # NPMplus logs on the host (read only).
+      - "/opt/npmplus/nginx/logs:/logs:ro"
+      # Writable volume so the filters survive container restarts.
+      - "logviewer-state:/state"
+
+volumes:
+  logviewer-state:
