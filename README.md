@@ -204,6 +204,7 @@ docker compose pull && docker compose up -d
 | `CARDS_HOSTS`       | *(empty)*        | Hosts to show as chips on the Requests card (comma separated)      |
 | `MY_IP`             | *(empty)*        | Override the server public IP used for the "my IP" chips           |
 | `PUBLIC_IP_REFRESH` | `600`            | How often (seconds) to re-check the public IP via an external API  |
+| `CARTO_KEY`         | *(empty)*        | Optional CARTO Basemaps API key for the 2D map tiles (no watermark) |
 
 > **Public IP detection.** When `MY_IP` is empty the app asks a *what-is-my-IP*
 > API (ipify, then ifconfig.me, then ipinfo.io) every `PUBLIC_IP_REFRESH`

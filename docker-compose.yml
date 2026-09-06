@@ -22,6 +22,9 @@ services:
       # Optional: force a public IP for the "my IP" chips.
       # Empty = detected automatically (external API) and refreshed periodically.
       # - "MY_IP=<your_public_ip>"
+      # Optional: CARTO Basemaps API key (free, non-commercial) for the 2D map
+      # tiles. Empty = no key sent (CARTO may show an "API key required" notice).
+      # - "CARTO_KEY=<your_carto_key>"
     volumes:
       # NPMplus logs on the host (read only).
       - "/opt/npmplus/nginx/logs:/logs:ro"

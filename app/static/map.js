@@ -8,6 +8,7 @@
 
   let HOME = null;
   let HOME_NAME = "";
+  let CARTO_KEY = "";
   let inited = false;
   let map2d = null;
   let globe = null;
@@ -99,7 +100,8 @@
       maxBoundsViscosity: 0.8,
     }).setView(HOME ? [HOME[0], HOME[1]] : [25, 0], 3);
     map2d.attributionControl.setPosition("bottomleft");
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    const tileBase = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+    L.tileLayer(CARTO_KEY ? `${tileBase}?key=${encodeURIComponent(CARTO_KEY)}` : tileBase, {
       attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 19,
     }).addTo(map2d);
 
@@ -292,12 +294,16 @@
   }
 
   function show() {
-    App.jget("/api/home").then((h) => {
+    Promise.all([
+      App.jget("/api/home").catch(() => null),
+      App.jget("/api/config").catch(() => null),
+    ]).then(([h, c]) => {
       if (h && typeof h.lat === "number" && typeof h.lon === "number") {
         HOME = [h.lat, h.lon];
         HOME_NAME = h.city && h.cc ? `${h.city}, ${h.cc}` : (h.cc || "home");
       }
-    }).catch(() => {}).finally(() => {
+      CARTO_KEY = (c && c.carto_key) || "";
+    }).finally(() => {
       init();
       if (mode === "2d") map2d.invalidateSize();
       else setTimeout(() => window.dispatchEvent(new Event("resize")), 50);

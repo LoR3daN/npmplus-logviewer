@@ -27,6 +27,9 @@ MY_IP = os.environ.get("MY_IP", "").strip()
 # How often (seconds) to re-check the public IP with an external API.
 PUBLIC_IP_REFRESH = float(os.environ.get("PUBLIC_IP_REFRESH", "600"))
 
+# Optional CARTO basemaps API key for the 2D map tiles. Empty = no key sent.
+CARTO_KEY = os.environ.get("CARTO_KEY", "").strip()
+
 _public_ip_cache = ""
 
 _IP_APIS = [
@@ -229,6 +232,11 @@ def api_home(request: Request):
         "cc": _home_cache.get("cc", ""),
         "city": _home_cache.get("city", ""),
     }
+
+
+@app.get("/api/config")
+def api_config():
+    return {"carto_key": CARTO_KEY}
 
 
 @app.get("/api/prefs")
