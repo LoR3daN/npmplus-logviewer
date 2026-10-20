@@ -223,7 +223,7 @@ is the real client IP and not a Cloudflare address.
 
 - **Request table** with time, host, IP, method, path, status, country, response
   time, bytes and user-agent. Sort any column and choose 25/50/100/200 rows per
-  page.
+  page. Hovering a country flag shows the full country name.
 - **Filters** for host, status, method and country (multi-select), IP, free-text
   search, date range, hide Uptime-Kuma and hide local IPs. Filters are saved on
   the server and restored after a restart.

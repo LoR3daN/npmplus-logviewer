@@ -45,9 +45,27 @@ function fmtTime(epoch) {
          p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
 }
 
+let regionNames = null;
+
+function countryName(code) {
+  if (!code || code.length !== 2) return "";
+  try {
+    if (!regionNames) {
+      regionNames = new Intl.DisplayNames(
+        [navigator.language || "en"],
+        { type: "region", fallback: "code" }
+      );
+    }
+    return regionNames.of(code.toUpperCase()) || code;
+  } catch (e) {
+    return code;
+  }
+}
+
 function flagHtml(code) {
   if (!code || code.length !== 2) return '<span class="cc-none">—</span>';
-  return `<img class="fl" src="https://flagcdn.com/20x15/${code.toLowerCase()}.png" alt="" title="${escapeHtml(code)}" loading="lazy" onerror="this.style.display='none'">`;
+  const name = escapeHtml(countryName(code));
+  return `<img class="fl" src="https://flagcdn.com/20x15/${code.toLowerCase()}.png" alt="" title="${name}" loading="lazy" onerror="this.style.display='none'">`;
 }
 
 function badgeClass(s) {
@@ -244,7 +262,10 @@ function mselSummary(key, sel) {
 
 function optionShown(key, v) {
   if (key === "status") return statusLabel(v);
-  if (key === "country") return `${escapeHtml(v)} ${flagHtml(v)}`;
+  if (key === "country") {
+    const name = escapeHtml(countryName(v));
+    return `<span title="${name}">${escapeHtml(v)} ${flagHtml(v)}</span>`;
+  }
   return escapeHtml(v);
 }
 
@@ -352,7 +373,8 @@ function renderRows(data) {
       cells.push(`<td class="path" title="${escapeHtml(r.path)}">${escapeHtml(r.path)}</td>`);
     }
     cells.push(`<td><span class="badge ${badgeClass(r.status)}">${r.status}</span></td>`);
-    cells.push(`<td title="${escapeHtml(r.country || "unknown")}" class="cc">${r.country ? `<span class="cc-code">${escapeHtml(r.country)}</span>${flagHtml(r.country)}` : '<span class="cc-none">—</span>'}</td>`);
+    const countryTitle = escapeHtml(countryName(r.country) || "unknown");
+    cells.push(`<td title="${countryTitle}" class="cc">${r.country ? `<span class="cc-code">${escapeHtml(r.country)}</span>${flagHtml(r.country)}` : '<span class="cc-none">—</span>'}</td>`);
     if (state.filters.simplified) {
       cells.push(`<td class="count">${r.count != null ? r.count : 1}</td>`);
     } else {
