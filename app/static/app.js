@@ -52,7 +52,7 @@ function countryName(code) {
   try {
     if (!regionNames) {
       regionNames = new Intl.DisplayNames(
-        [navigator.language || "en"],
+        ["en"],
         { type: "region", fallback: "code" }
       );
     }
