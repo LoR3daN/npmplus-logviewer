@@ -25,6 +25,7 @@ bytes, user-agent and country. It does **not** read NPMplus's normal
 | ![2D map](docs/screenshots/map-2d.png) | ![3D globe](docs/screenshots/map-3d.png) |
 
 > Screenshots use sample, sanitized data (masked IPs and placeholder hostnames).
+> They may show an earlier table layout.
 
 ---
 
@@ -226,8 +227,10 @@ is the real client IP and not a Cloudflare address.
 - **Filters** for host, status, method and country (multi-select), IP, free-text
   search, date range, hide Uptime-Kuma and hide local IPs. Filters are saved on
   the server and restored after a restart.
-- **Simplified view** collapses consecutive requests from the same IP and host
-  into one row with a `×N` badge.
+- **Simplified view** groups consecutive requests from the same host, IP and
+  status into one row. The **Requests** column shows the count, and the path,
+  method, response time, bytes and user-agent columns are hidden. The Method
+  filter is hidden too. The row time is the last request in the group.
 - **Summary cards** with total requests, 2xx/3xx/4xx/5xx breakdown and host
   chips. The server public IP is shown as `IP`, `IP:80` and `IP:443` chips.
 - **Live map** with Leaflet 2D and globe.gl 3D: animated beams from each country
@@ -335,9 +338,10 @@ Set `MY_IP` in the viewer environment. If NPMplus is behind Cloudflare, set
 - `ip`, `q`: contains filters for IP and free text.
 - `exclude_ua`, `exclude_local`: hide user agents or local IPs.
 - `from`, `to`: ISO date range in local time.
-- `collapse`: simplified view.
+- `collapse`: simplified view. Groups consecutive requests with the same host,
+  IP and status; the order of the groups is chronological.
 - `sort`: `ts`, `host`, `ip`, `method`, `path`, `status`, `country`, `time`,
-  `bytes` or `ua`; `order`: `asc` or `desc`.
+  `bytes`, `ua` or `count`; `order`: `asc` or `desc`.
 - `page`, `size`.
 
 `GET /api/live` accepts the same filters plus `after` (epoch cursor) and `limit`.

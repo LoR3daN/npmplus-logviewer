@@ -47,10 +47,7 @@ function fmtTime(epoch) {
 
 function flagHtml(code) {
   if (!code || code.length !== 2) return '<span class="cc-none">—</span>';
-  const emoji = String.fromCodePoint(
-    0x1F1E6 + code.charCodeAt(0) - 65,
-    0x1F1E6 + code.charCodeAt(1) - 65);
-  return `<img class="fl" src="https://flagcdn.com/20x15/${code.toLowerCase()}.png" alt="${escapeHtml(code)}" title="${escapeHtml(code)}" loading="lazy" onerror="this.outerHTML='${emoji}'">`;
+  return `<img class="fl" src="https://flagcdn.com/20x15/${code.toLowerCase()}.png" alt="" title="${escapeHtml(code)}" loading="lazy" onerror="this.style.display='none'">`;
 }
 
 function badgeClass(s) {
@@ -63,8 +60,10 @@ function badgeClass(s) {
 function filterParams() {
   const p = new URLSearchParams();
   const f = state.filters;
-  for (const k of ["host", "status", "method", "country"])
+  for (const k of ["host", "status", "method", "country"]) {
+    if (k === "method" && f.simplified) continue;
     if (f[k] && f[k].length) p.set(k, f[k].join(","));
+  }
   for (const k of ["ip", "q", "from", "to"])
     if (f[k]) p.set(k, f[k]);
   if (f.hide_uptime) p.set("exclude_ua", "Uptime-Kuma");
@@ -96,6 +95,7 @@ async function loadPrefs() {
     state.filters.hide_uptime = !!p.hide_uptime;
     state.filters.hide_local = !!p.hide_local;
     state.filters.simplified = !!p.simplified;
+    if (state.filters.simplified) state.filters.method = [];
     state.filters.from = p.from || "";
     state.filters.to = p.to || "";
     if (typeof p.apply_filters === "boolean") state.apply_filters = p.apply_filters;
@@ -137,11 +137,14 @@ const HEADERS = [
   ["time", "Response time"],
   ["bytes", "Bytes"],
   ["ua", "User-Agent"],
+  ["count", "Requests"],
 ];
 
 function renderHead() {
   const tr = $("tableHead");
-  const hide = state.filters.simplified ? new Set(["path", "time", "bytes"]) : new Set();
+  const hide = state.filters.simplified
+    ? new Set(["method", "path", "time", "bytes", "ua"])
+    : new Set(["count"]);
   const headers = HEADERS.filter(([key]) => !hide.has(key));
   tr.innerHTML = headers.map(([key, label]) => {
     const active = state.sort === key;
@@ -340,21 +343,23 @@ function renderRows(data) {
   }
   body.innerHTML = items.map((r) => {
     const cells = [
-      `<td>${fmtTime(r.epoch)}${r.count > 1 ? ` <span class="badge cnt">×${r.count}</span>` : ""}</td>`,
+      `<td>${fmtTime(r.epoch)}</td>`,
       `<td class="host" title="${escapeHtml(r.host)}">${escapeHtml(r.host)}</td>`,
       `<td>${escapeHtml(r.ip)}</td>`,
-      `<td>${escapeHtml(r.method)}</td>`,
     ];
     if (!state.filters.simplified) {
+      cells.push(`<td>${escapeHtml(r.method)}</td>`);
       cells.push(`<td class="path" title="${escapeHtml(r.path)}">${escapeHtml(r.path)}</td>`);
     }
     cells.push(`<td><span class="badge ${badgeClass(r.status)}">${r.status}</span></td>`);
     cells.push(`<td title="${escapeHtml(r.country || "unknown")}" class="cc">${r.country ? `<span class="cc-code">${escapeHtml(r.country)}</span>${flagHtml(r.country)}` : '<span class="cc-none">—</span>'}</td>`);
-    if (!state.filters.simplified) {
+    if (state.filters.simplified) {
+      cells.push(`<td class="count">${r.count != null ? r.count : 1}</td>`);
+    } else {
       cells.push(`<td>${r.time_ms != null ? r.time_ms + " ms" : "—"}</td>`);
       cells.push(`<td>${fmtBytes(r.bytes != null ? r.bytes : r.body)}</td>`);
+      cells.push(`<td class="ua" title="${escapeHtml(r.ua)}">${escapeHtml(r.ua)}</td>`);
     }
-    cells.push(`<td class="ua" title="${escapeHtml(r.ua)}">${escapeHtml(r.ua)}</td>`);
     return `<tr>${cells.join("")}</tr>`;
   }).join("");
 
@@ -448,9 +453,16 @@ function bindFilters() {
 
   $("btnSimplified").addEventListener("click", () => {
     state.filters.simplified = !state.filters.simplified;
-    if (state.filters.simplified && state.filters.method.length) {
-      state.filters.method = [];
-      mselSearch.method = "";
+    if (state.filters.simplified) {
+      if (state.filters.method.length) {
+        state.filters.method = [];
+        mselSearch.method = "";
+      }
+      if (!["ts", "host", "ip", "status", "country", "count"].includes(state.sort)) {
+        state.sort = "ts";
+      }
+    } else if (state.sort === "count") {
+      state.sort = "ts";
     }
     $("btnSimplified").classList.toggle("active", state.filters.simplified);
     state.page = 1;

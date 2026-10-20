@@ -39,7 +39,7 @@ requirements.txt   pinned: fastapi 0.115.6, uvicorn[standard] 0.32.1
 
 - **Log parsing is the core.** The viewer reads `access_detailed.log*` with one line per request: `[date] host ip response_time "request" status body_bytes bytes_sent "referer" "ua" [COUNTRY]`. `parse_line` uses a single regex; changing the format or regex breaks everything.
 - Rotated files are tracked by **inode + size + first-line fingerprint**, with a pending buffer for incomplete lines. NPMplus logrotate uses `copytruncate`, so `scan()` must handle in-place truncation; the dedup key (timestamp, IP, host, method, path, status, body, bytes, time) avoids duplicates when `.1` copies are read.
-- Filters, sort, pagination and collapse (`_collapse_runs`) live in `parser.py`; keep them consistent between `/api/entries` and `/api/live`.
+- Filters, sort, pagination and collapse (`_collapse_runs`, key = host + IP + status) live in `parser.py`; keep them consistent between `/api/entries` and `/api/live`.
 - The app has **no built-in login** — if exposed publicly it must sit behind an NPMplus Access List / Basic Auth. Don't add auth logic without discussion.
 - Screenshots in `docs/screenshots` must use **sample, sanitized data** (masked IPs, placeholder hostnames) — never real traffic.
 - Dependencies are pinned exactly in `requirements.txt`; pin new ones the same way.

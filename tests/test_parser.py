@@ -115,6 +115,17 @@ class ParserTests(unittest.TestCase):
         self.assertEqual([r["host"] for r in store.records.values()],
                          ["a.example"])
 
+    def test_live_collapse_groups_by_status(self):
+        self.write([
+            make_line("23:00:00", host="a.example", status=200),
+            make_line("23:00:01", host="a.example", status=200),
+            make_line("23:00:02", host="a.example", status=304),
+        ])
+        store = LogStore(self.dir)
+        store.scan()
+        live = store.query_live(collapse=True, limit=10)
+        self.assertEqual([r["status"] for r in live], [200, 304])
+
     def test_query_live_returns_newest_record(self):
         self.write([make_line("23:00:02", host="new.example")])
         with open(os.path.join(self.dir, "access_detailed.log.1"), "w",
@@ -124,6 +135,32 @@ class ParserTests(unittest.TestCase):
         store.scan()
         self.assertEqual([r["host"] for r in store.query_live(limit=1)],
                          ["new.example"])
+
+    def test_collapse_groups_by_status(self):
+        self.write([
+            make_line("23:00:00", host="a.example", status=200),
+            make_line("23:00:01", host="a.example", status=200),
+            make_line("23:00:02", host="a.example", status=304),
+            make_line("23:00:03", host="a.example", status=200),
+            make_line("23:00:04", host="b.example", status=200),
+        ])
+        store = LogStore(self.dir)
+        store.scan()
+        out = store.query(collapse=True, sort="ts", order="desc", size=10)
+        rows = [(r["host"], r["status"], r["count"], r["ts"])
+                for r in out["items"]]
+        self.assertEqual(out["total"], 4)
+        self.assertEqual(rows[0], ("b.example", 200, 1,
+                                   "2026-10-20T23:00:04+02:00"))
+        self.assertEqual(rows[1], ("a.example", 200, 1,
+                                   "2026-10-20T23:00:03+02:00"))
+        self.assertEqual(rows[2], ("a.example", 304, 1,
+                                   "2026-10-20T23:00:02+02:00"))
+        self.assertEqual(rows[3], ("a.example", 200, 2,
+                                   "2026-10-20T23:00:01+02:00"))
+
+        out = store.query(collapse=True, sort="count", order="desc", size=10)
+        self.assertEqual(out["items"][0]["count"], 2)
 
     def test_sort_by_host_and_bytes(self):
         self.write([

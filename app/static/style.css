@@ -312,6 +312,7 @@ td.cc { text-align: center; font-size: 15px; white-space: nowrap; }
 td.cc .fl { width: 20px; height: 15px; border-radius: 2px; vertical-align: middle; display: inline-block; }
 td.cc .cc-code { font-size: 13px; font-weight: 600; color: var(--text); margin-right: 5px; }
 td.cc .cc-none { color: var(--muted); }
+#tableHead th[data-sort="count"], #logBody td.count { text-align: right; white-space: nowrap; }
 
 .badge {
   display: inline-block;

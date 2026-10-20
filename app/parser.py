@@ -380,6 +380,37 @@ class LogStore:
         )
 
         reverse = order == "desc"
+
+        # Simplified view: collapse consecutive runs of the same host, IP and
+        # status into one row, then sort the resulting runs. The grouping is
+        # always chronological, independent of the table sort.
+        if collapse:
+            items.sort(key=lambda r: r["epoch"])
+            runs = self._collapse_runs(items)
+            if sort == "count":
+                runs.sort(key=lambda run: run[1], reverse=reverse)
+            elif sort == "host":
+                runs.sort(key=lambda run: (run[0]["host"] or "").lower(),
+                          reverse=reverse)
+            elif sort == "ip":
+                runs.sort(key=lambda run: _ip_sort_key(run[0]["ip"]),
+                          reverse=reverse)
+            elif sort == "status":
+                runs.sort(key=lambda run: run[0]["status"], reverse=reverse)
+            elif sort == "country":
+                runs.sort(key=lambda run: (run[0]["country"] or "").lower(),
+                          reverse=reverse)
+            else:
+                runs.sort(key=lambda run: run[0]["epoch"], reverse=reverse)
+            total = len(runs)
+            start = (page - 1) * size
+            out = []
+            for r, count in runs[start:start + size]:
+                row = self._to_row(r)
+                row["count"] = count
+                out.append(row)
+            return {"total": total, "page": page, "size": size, "items": out}
+
         if sort == "host":
             items.sort(key=lambda r: (r["host"] or "").lower(), reverse=reverse)
         elif sort == "ip":
@@ -405,19 +436,6 @@ class LogStore:
         else:
             items.sort(key=lambda r: r["epoch"], reverse=reverse)
 
-        # Simplified view: collapse consecutive runs of requests from the
-        # same IP to the same domain into a single row.
-        if collapse:
-            collapsed = self._collapse_runs(items)
-            total = len(collapsed)
-            start = (page - 1) * size
-            out = []
-            for r, count in collapsed[start:start + size]:
-                row = self._to_row(r)
-                row["count"] = count
-                out.append(row)
-            return {"total": total, "page": page, "size": size, "items": out}
-
         total = len(items)
         start = (page - 1) * size
         out = [self._to_row(r) for r in items[start:start + size]]
@@ -425,7 +443,7 @@ class LogStore:
 
     @staticmethod
     def _collapse_runs(items):
-        """Collapse consecutive records with the same (host, ip) into runs.
+        """Collapse consecutive records with the same (host, ip, status).
 
         Returns a list of (last_record_of_run, run_length). The epoch of the
         returned record is the latest one of the run, so incremental live
@@ -435,7 +453,7 @@ class LogStore:
         last_key = None
         run = None
         for r in items:
-            key = (r["host"], r["ip"])
+            key = (r["host"], r["ip"], r["status"])
             if key != last_key:
                 run = [r, 1]
                 runs.append(run)
@@ -471,8 +489,8 @@ class LogStore:
         Reuses the same filters as query(). Only records whose country has a
         known centroid are returned, with lat/lon attached. With after_epoch
         set, only records newer than it are returned (incremental polling).
-        With collapse, consecutive runs from the same (host, ip) are reduced
-        to one beam.
+        With collapse, consecutive runs from the same (host, ip, status) are
+        reduced to one beam.
         """
         items = self._filtered(**kwargs)
         items.sort(key=lambda r: r["epoch"])
