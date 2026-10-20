@@ -1,28 +1,29 @@
-"""Parser for NPMplus access.log files.
+"""Parser for NPMplus access_detailed.log files.
 
-Each request generates TWO lines in the same file:
-  A) proxy_host format: [date] host ip time "request" status body bytes referer ua
-  B) standard nginx format + country: ip - - [date] "request" status body "referer" "ua" [COUNTRY]
-
-Both are matched and merged into a single record (dedup by
-date+IP+request+status+body).
+One line per request:
+  [date] host ip response_time "request" status body_bytes bytes_sent "referer" "ua" [COUNTRY]
 """
 
 import ipaddress
+import logging
 import os
 import re
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .geo import cc_latlon
 
+logger = logging.getLogger(__name__)
+
 LOCAL_TZ = ZoneInfo(os.environ.get("TZ", "Europe/Madrid"))
 
-# [14/Aug/2026:21:54:54 +0200] 192.168.X.XXX:81 192.168.X.XXX 0.023 "GET / HTTP/1.1" 200 1470 3369 - Uptime-Kuma/2.5.0
-FORMAT_A = re.compile(
+LOG_PREFIX = "access_detailed.log"
+
+# [14/Aug/2026:21:54:54 +0200] example.com 192.168.X.XXX 0.023 "GET / HTTP/1.1" 200 1470 3369 "-" "Uptime-Kuma/2.5.0" [ES]
+FORMAT = re.compile(
     r"^\[(?P<time>[^\]]+)\]\s+"
     r"(?P<host>\S+)\s+"
     r"(?P<ip>\S+)\s+"
@@ -31,20 +32,9 @@ FORMAT_A = re.compile(
     r"(?P<status>\d+)\s+"
     r"(?P<body>\d+)\s+"
     r"(?P<bytes>\d+)\s+"
-    r"(?P<referer>\"[^\"]*\"|-)\s+"
-    r"(?P<ua>.+)$"
-)
-
-# 192.168.X.XXX - - [14/Aug/2026:21:54:54 +0200] "GET / HTTP/1.1" 200 1470 "-" "Uptime-Kuma/2.5.0" [ES]
-FORMAT_B = re.compile(
-    r"^(?P<ip>\S+)\s+-\s+(?P<user>\S+)\s+"
-    r"\[(?P<time>[^\]]+)\]\s+"
-    r"\"(?P<request>[^\"]*)\"\s+"
-    r"(?P<status>\d+)\s+"
-    r"(?P<body>\d+)\s+"
     r"\"(?P<referer>[^\"]*)\"\s+"
-    r"\"(?P<ua>[^\"]*)\""
-    r"(?:\s+\[(?P<country>[^\]]*)\])?$"
+    r"\"(?P<ua>[^\"]*)\"\s+"
+    r"\[(?P<country>[^\]]*)\]$"
 )
 
 _TIME_FMT = "%d/%b/%Y:%H:%M:%S %z"
@@ -77,66 +67,42 @@ def split_request(req):
 
 
 def parse_line(line):
-    """Return a unified record, or None if the line is not recognized."""
-    line = line.rstrip("\n")
+    """Return a record, or None if the line is not recognized."""
+    line = line.rstrip("\r\n")
     if not line:
         return None
 
-    m = FORMAT_B.match(line)
-    if m:
-        g = m.groupdict()
-        dt, epoch = parse_time(g["time"])
-        method, path, http = split_request(g["request"])
-        country = g.get("country") or ""
-        if country == "-":
-            country = ""
-        return {
-            "kind": "B",
-            "ts": dt.isoformat(),
-            "epoch": epoch,
-            "host": "",
-            "ip": g["ip"],
-            "time_ms": None,
-            "method": method,
-            "path": path,
-            "http": http,
-            "status": int(g["status"]),
-            "body": int(g["body"]),
-            "bytes": None,
-            "referer": g["referer"],
-            "ua": g["ua"],
-            "country": country,
-        }
+    m = FORMAT.match(line)
+    if not m:
+        return None
 
-    m = FORMAT_A.match(line)
-    if m:
-        g = m.groupdict()
-        dt, epoch = parse_time(g["time"])
-        method, path, http = split_request(g["request"])
-        referer = g["referer"].strip('"')
-        return {
-            "kind": "A",
-            "ts": dt.isoformat(),
-            "epoch": epoch,
-            "host": g["host"],
-            "ip": g["ip"],
-            "time_ms": int(round(float(g["rt"]) * 1000)),
-            "method": method,
-            "path": path,
-            "http": http,
-            "status": int(g["status"]),
-            "body": int(g["body"]),
-            "bytes": int(g["bytes"]),
-            "referer": referer,
-            "ua": g["ua"],
-            "country": "",
-        }
-    return None
+    g = m.groupdict()
+    dt, epoch = parse_time(g["time"])
+    method, path, http = split_request(g["request"])
+    country = g["country"]
+    if country == "-":
+        country = ""
+    return {
+        "ts": dt.isoformat(),
+        "epoch": epoch,
+        "host": g["host"],
+        "ip": g["ip"],
+        "time_ms": int(round(float(g["rt"]) * 1000)),
+        "method": method,
+        "path": path,
+        "http": http,
+        "status": int(g["status"]),
+        "body": int(g["body"]),
+        "bytes": int(g["bytes"]),
+        "referer": g["referer"],
+        "ua": g["ua"],
+        "country": country,
+    }
 
 
 def _key(rec):
-    return (rec["ts"], rec["ip"], rec["method"], rec["path"],
-            rec["status"], rec["body"])
+    return (rec["ts"], rec["ip"], rec["host"], rec["method"], rec["path"],
+            rec["status"], rec["body"], rec["bytes"], rec["time_ms"])
 
 
 def _is_local_ip(ip):
@@ -149,13 +115,29 @@ def _is_local_ip(ip):
             or addr.is_multicast or addr.is_unspecified or addr.is_reserved)
 
 
-class LogStore:
-    """Keeps records in memory and scans the logs incrementally.
+def _ip_sort_key(value):
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        return (2, value)
+    return (addr.version, int(addr))
 
-    On startup (empty memory) it does a full read of all access.log files.
-    Afterwards it only reads the new bytes of each file (tracked by
-    inode + size), avoiding duplicates when logrotate renames files
-    (the inode does not change on rotation).
+
+def _read_head(f):
+    """Return the first line of an open file, used to detect truncation."""
+    f.seek(0)
+    return f.readline(4096)
+
+
+class LogStore:
+    """Keeps records in memory and scans the detailed log incrementally.
+
+    On startup (empty memory) it does a full read of all access_detailed.log
+    files. Afterwards it only reads new bytes of each file (tracked by inode,
+    size, first-line fingerprint and pending bytes). NPMplus logrotate uses
+    copytruncate, so the active file is truncated in place and its previous
+    content appears in a new .1 file; the dedup key avoids inserting those
+    lines twice.
     """
 
     def __init__(self, log_dir, max_entries=300_000):
@@ -163,7 +145,7 @@ class LogStore:
         self.max_entries = max_entries
         self._lock = threading.RLock()
         self.records = {}
-        self.order = []
+        self.order = deque()
         self.c_host = Counter()
         self.c_status = Counter()
         self.c_method = Counter()
@@ -171,14 +153,20 @@ class LogStore:
         self.state = {}
         self.last_scan = None
         self.files_info = []
+        self.parse_errors = 0
+        self._logged_errors = 0
 
     # ---- scanning ------------------------------------------------------------
     def files(self):
         if not os.path.isdir(self.log_dir):
             return []
+        try:
+            names = os.listdir(self.log_dir)
+        except OSError:
+            return []
         out = []
-        for name in os.listdir(self.log_dir):
-            if not name.startswith("access.log") or name.endswith(".gz"):
+        for name in names:
+            if not name.startswith(LOG_PREFIX) or name.endswith(".gz"):
                 continue
             full = os.path.join(self.log_dir, name)
             if os.path.isfile(full):
@@ -186,10 +174,11 @@ class LogStore:
 
         def sort_key(item):
             name = item[0]
-            if name == "access.log":
-                return (0, 0)
+            if name == LOG_PREFIX:
+                return (1, 0)
+            suffix = name[len(LOG_PREFIX):].lstrip(".")
             try:
-                return (1, int(name.split(".", 1)[-1]))
+                return (0, -int(suffix))
             except ValueError:
                 return (2, name)
 
@@ -202,58 +191,81 @@ class LogStore:
             return
         with self._lock:
             info = []
+            current = set()
             for name, full in self.files():
                 try:
-                    st = os.stat(full)
+                    f = open(full, "rb")
                 except OSError:
                     continue
-                inode = st.st_ino
-                size = st.st_size
-                prev = self.state.get(inode)
-                if prev is not None and prev["size"] == size:
-                    info.append({"file": name, "inode": inode, "size": size})
-                    continue
-                offset = min(prev["size"], size) if prev else 0
-                with open(full, "rb") as f:
-                    if offset:
+                with f:
+                    try:
+                        st = os.fstat(f.fileno())
+                    except OSError:
+                        continue
+                    inode = st.st_ino
+                    size = st.st_size
+                    current.add(inode)
+                    head = _read_head(f)
+                    prev = self.state.get(inode)
+                    if (prev is not None and prev["size"] == size
+                            and prev.get("head") == head):
+                        info.append({"file": name, "inode": inode, "size": size})
+                        continue
+                    truncated = prev is not None and (
+                        size < prev["size"] or prev.get("head") != head
+                    )
+                    if prev is None or truncated:
+                        offset = 0
+                        pending = b""
+                    else:
+                        offset = prev["size"]
+                        pending = prev.get("pending", b"")
+                    try:
                         f.seek(offset)
-                    data = f.read()
-                self.state[inode] = {"file": name, "size": size}
-                for line in data.decode("utf-8", "replace").splitlines():
-                    rec = parse_line(line)
-                    if rec:
-                        self._add(rec)
-                info.append({"file": name, "inode": inode, "size": size})
+                        data = f.read()
+                    except OSError:
+                        continue
+                    processed = offset + len(data)
+                    chunks = (pending + data).split(b"\n")
+                    next_pending = chunks.pop()
+                    for raw in chunks:
+                        line = raw.decode("utf-8", "replace").rstrip("\r")
+                        if not line:
+                            continue
+                        rec = parse_line(line)
+                        if rec:
+                            self._add(rec)
+                        elif line.startswith("["):
+                            self.parse_errors += 1
+                            if self._logged_errors < 5:
+                                logger.warning(
+                                    "Unparsed line in %s: %s", name, line[:300]
+                                )
+                                self._logged_errors += 1
+                    self.state[inode] = {
+                        "file": name,
+                        "size": processed,
+                        "head": head,
+                        "pending": next_pending,
+                    }
+                    info.append({"file": name, "inode": inode, "size": size})
+            self.state = {i: s for i, s in self.state.items() if i in current}
             self.files_info = info
             self.last_scan = time.time()
 
     # ---- insert / dedup -----------------------------------------------------
     def _add(self, rec):
         key = _key(rec)
-        existing = self.records.get(key)
-        if existing is None:
-            self.records[key] = rec
-            self.order.append(key)
-            self._count(rec, 1)
-            while len(self.order) > self.max_entries:
-                old = self.order.pop(0)
-                gone = self.records.pop(old, None)
-                if gone:
-                    self._count(gone, -1)
-        elif rec["kind"] == "A" and existing["kind"] == "B":
-            self._host_delta(existing, -1)
-            existing["host"] = rec["host"]
-            existing["time_ms"] = rec["time_ms"]
-            existing["bytes"] = rec["bytes"]
-            self._host_delta(existing, 1)
-        elif rec["kind"] == "B" and existing["kind"] == "A":
-            if rec["country"] and rec["country"] != existing["country"]:
-                if existing["country"]:
-                    self._country_delta(existing, -1)
-                existing["country"] = rec["country"]
-                self._country_delta(existing, 1)
-            if rec["ua"]:
-                existing["ua"] = rec["ua"]
+        if key in self.records:
+            return
+        self.records[key] = rec
+        self.order.append(key)
+        self._count(rec, 1)
+        while len(self.order) > self.max_entries:
+            old = self.order.popleft()
+            gone = self.records.pop(old, None)
+            if gone:
+                self._count(gone, -1)
 
     def _host_delta(self, rec, delta):
         host = rec["host"] or "—"
@@ -280,24 +292,26 @@ class LogStore:
 
     # ---- queries ------------------------------------------------------------
     def stats(self):
-        by_status = {"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0}
-        for code, n in self.c_status.items():
-            bucket = f"{code // 100}xx"
-            by_status[bucket] = by_status.get(bucket, 0) + n
-        return {
-            "total": len(self.records),
-            "by_status": by_status,
-            "statuses": [{"value": k, "count": v}
-                         for k, v in sorted(self.c_status.items())],
-            "hosts": [{"value": k, "count": v}
-                      for k, v in self.c_host.most_common()],
-            "methods": [{"value": k, "count": v}
-                        for k, v in self.c_method.most_common()],
-            "countries": [{"value": k, "count": v}
-                          for k, v in self.c_country.most_common()],
-            "last_scan": self.last_scan,
-            "files": self.files_info,
-        }
+        with self._lock:
+            by_status = {"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0}
+            for code, n in self.c_status.items():
+                bucket = f"{code // 100}xx"
+                by_status[bucket] = by_status.get(bucket, 0) + n
+            return {
+                "total": len(self.records),
+                "by_status": by_status,
+                "statuses": [{"value": k, "count": v}
+                             for k, v in sorted(self.c_status.items())],
+                "hosts": [{"value": k, "count": v}
+                          for k, v in self.c_host.most_common()],
+                "methods": [{"value": k, "count": v}
+                            for k, v in self.c_method.most_common()],
+                "countries": [{"value": k, "count": v}
+                              for k, v in self.c_country.most_common()],
+                "last_scan": self.last_scan,
+                "files": self.files_info,
+                "parse_errors": self.parse_errors,
+            }
 
     def _filtered(self, host=None, status=None, method=None, country=None,
                   ip=None, q=None, exclude_ua=None, exclude_local=False,
@@ -309,45 +323,50 @@ class LogStore:
         method = method or []
         country = country or []
         items = []
-        for key in self.order:
-            r = self.records[key]
-            if host and r["host"] not in host:
-                continue
-            if status:
-                ok = False
-                for s in status:
-                    if s.endswith("xx"):
-                        base = int(s[0]) * 100
-                        if base <= r["status"] < base + 100:
-                            ok = True
-                            break
-                    elif r["status"] == int(s):
-                        ok = True
-                        break
-                if not ok:
+        with self._lock:
+            for key in self.order:
+                r = self.records[key]
+                if host and r["host"] not in host:
                     continue
-            if method and r["method"] not in method:
-                continue
-            if country and r["country"] not in country:
-                continue
-            if ip and ip not in r["ip"]:
-                continue
-            if exclude_local and _is_local_ip(r["ip"]):
-                continue
-            if q:
-                hay = " ".join([r["ip"], r["host"], r["method"], r["path"],
-                                r["ua"], r["referer"]]).lower()
-                if q.lower() not in hay:
+                if status:
+                    ok = False
+                    for s in status:
+                        if len(s) == 3 and s.endswith("xx") and s[0].isdigit():
+                            base = int(s[0]) * 100
+                            if base <= r["status"] < base + 100:
+                                ok = True
+                                break
+                        else:
+                            try:
+                                if r["status"] == int(s):
+                                    ok = True
+                                    break
+                            except ValueError:
+                                continue
+                    if not ok:
+                        continue
+                if method and r["method"] not in method:
                     continue
-            if exclude_ua:
-                ua_low = r["ua"].lower()
-                if any(x and x in ua_low for x in exclude_ua):
+                if country and r["country"] not in country:
                     continue
-            if from_epoch is not None and r["epoch"] < from_epoch:
-                continue
-            if to_epoch is not None and r["epoch"] > to_epoch:
-                continue
-            items.append(r)
+                if ip and ip not in r["ip"]:
+                    continue
+                if exclude_local and _is_local_ip(r["ip"]):
+                    continue
+                if q:
+                    hay = " ".join([r["ip"], r["host"], r["method"], r["path"],
+                                    r["ua"], r["referer"]]).lower()
+                    if q.lower() not in hay:
+                        continue
+                if exclude_ua:
+                    ua_low = r["ua"].lower()
+                    if any(x and x in ua_low for x in exclude_ua):
+                        continue
+                if from_epoch is not None and r["epoch"] < from_epoch:
+                    continue
+                if to_epoch is not None and r["epoch"] > to_epoch:
+                    continue
+                items.append(r)
         return items
 
     def query(self, host=None, status=None, method=None, country=None,
@@ -360,15 +379,31 @@ class LogStore:
             from_epoch=from_epoch, to_epoch=to_epoch,
         )
 
-        if sort == "status":
-            items.sort(key=lambda r: r["status"], reverse=(order == "desc"))
+        reverse = order == "desc"
+        if sort == "host":
+            items.sort(key=lambda r: (r["host"] or "").lower(), reverse=reverse)
+        elif sort == "ip":
+            items.sort(key=lambda r: _ip_sort_key(r["ip"]), reverse=reverse)
+        elif sort == "method":
+            items.sort(key=lambda r: (r["method"] or "").lower(), reverse=reverse)
+        elif sort == "path":
+            items.sort(key=lambda r: (r["path"] or "").lower(), reverse=reverse)
+        elif sort == "status":
+            items.sort(key=lambda r: r["status"], reverse=reverse)
+        elif sort == "country":
+            items.sort(key=lambda r: (r["country"] or "").lower(), reverse=reverse)
         elif sort == "time":
             items.sort(key=lambda r: r["time_ms"] if r["time_ms"] is not None else -1,
-                       reverse=(order == "desc"))
+                       reverse=reverse)
+        elif sort == "bytes":
+            items.sort(key=lambda r: r["bytes"] if r["bytes"] is not None else r["body"],
+                       reverse=reverse)
         elif sort == "body":
-            items.sort(key=lambda r: r["body"], reverse=(order == "desc"))
+            items.sort(key=lambda r: r["body"], reverse=reverse)
+        elif sort == "ua":
+            items.sort(key=lambda r: (r["ua"] or "").lower(), reverse=reverse)
         else:
-            items.sort(key=lambda r: r["epoch"], reverse=(order == "desc"))
+            items.sort(key=lambda r: r["epoch"], reverse=reverse)
 
         # Simplified view: collapse consecutive runs of requests from the
         # same IP to the same domain into a single row.
@@ -440,6 +475,7 @@ class LogStore:
         to one beam.
         """
         items = self._filtered(**kwargs)
+        items.sort(key=lambda r: r["epoch"])
         if collapse:
             items = [run[0] for run in self._collapse_runs(items)]
         if after_epoch is not None:
@@ -467,47 +503,42 @@ class LogStore:
         """Hosts matching the server's public IP, incl. port 80 and 443."""
         if not ip:
             return []
-        variants = [ip, f"{ip}:80", f"{ip}:443"]
-        counts = Counter()
-        for key in self.order:
-            r = self.records[key]
-            if r["host"] in variants:
-                counts[r["host"]] += 1
-        return [{"value": v, "count": counts.get(v, 0)} for v in variants]
-
-    def _host_count(self, host):
-        n = 0
-        for key in self.order:
-            if self.records[key]["host"] == host:
-                n += 1
-        return n
+        if ":" in ip:
+            variants = [ip, f"[{ip}]:80", f"[{ip}]:443"]
+        else:
+            variants = [ip, f"{ip}:80", f"{ip}:443"]
+        with self._lock:
+            return [{"value": v, "count": self.c_host.get(v, 0)}
+                    for v in variants]
 
     def detect_public_ip_from_logs(self):
         """Best guess of the server's current public IP.
 
-        The server's public IP appears in the logs as a proxy host with
-        :80 and :443 variants (IP / IP:80 / IP:443). Returns the most
-        recent such public IP.
+        Looks for a public IP in the most recent Host values, either alone or
+        with an explicit :80/:443 port. Returns the most recent match.
         """
         seen = set()
-        for key in reversed(self.order):
-            r = self.records[key]
-            host = r["host"] or ""
-            if ":" not in host:
-                continue
-            h, _, p = host.rpartition(":")
-            if p not in ("80", "443"):
-                continue
-            if h in seen:
-                continue
-            seen.add(h)
-            try:
-                addr = ipaddress.ip_address(h)
-            except ValueError:
-                continue
-            if addr.is_private or addr.is_loopback or addr.is_link_local:
-                continue
-            if (self._host_count(h) or self._host_count(f"{h}:80")
-                    or self._host_count(f"{h}:443")):
-                return h
+        with self._lock:
+            for key in reversed(self.order):
+                host = self.records[key]["host"] or ""
+                if not host or host in seen:
+                    continue
+                seen.add(host)
+                candidates = [host]
+                if host.startswith("["):
+                    candidates.append(host.split("]")[0][1:])
+                elif host.count(":") == 1:
+                    h, _, p = host.rpartition(":")
+                    if p in ("80", "443"):
+                        candidates.append(h)
+                for cand in candidates:
+                    try:
+                        addr = ipaddress.ip_address(cand)
+                    except ValueError:
+                        continue
+                    if (addr.is_private or addr.is_loopback or addr.is_link_local
+                            or addr.is_multicast or addr.is_unspecified
+                            or addr.is_reserved):
+                        continue
+                    return cand
         return ""

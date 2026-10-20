@@ -135,13 +135,13 @@ const HEADERS = [
   ["status", "Status"],
   ["country", "Country"],
   ["time", "Response time"],
-  ["body", "Bytes"],
+  ["bytes", "Bytes"],
   ["ua", "User-Agent"],
 ];
 
 function renderHead() {
   const tr = $("tableHead");
-  const hide = state.filters.simplified ? new Set(["path", "time", "body"]) : new Set();
+  const hide = state.filters.simplified ? new Set(["path", "time", "bytes"]) : new Set();
   const headers = HEADERS.filter(([key]) => !hide.has(key));
   tr.innerHTML = headers.map(([key, label]) => {
     const active = state.sort === key;

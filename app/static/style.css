@@ -48,9 +48,10 @@ header {
 
 .brand { display: flex; align-items: center; gap: 12px; }
 .logo {
-  font-size: 26px;
-  color: var(--accent);
-  line-height: 1;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: block;
 }
 h1 { font-size: 18px; margin: 0; }
 .muted { color: var(--muted); font-size: 12px; }

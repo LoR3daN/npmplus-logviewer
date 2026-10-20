@@ -1,5 +1,6 @@
 import ipaddress
 import json
+import logging
 import os
 import threading
 import time
@@ -12,6 +13,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .parser import LOCAL_TZ, LogStore
+
+logger = logging.getLogger(__name__)
 
 LOG_DIR = os.environ.get("LOG_DIR", "/logs")
 REFRESH_SECONDS = float(os.environ.get("REFRESH_SECONDS", "5"))
@@ -87,7 +90,7 @@ def _public_ip_loop():
                     if loc:
                         _home_cache = {"ip": ip, **loc}
         except Exception:
-            pass
+            logger.debug("Public IP refresh failed", exc_info=True)
         time.sleep(PUBLIC_IP_REFRESH)
 
 DEFAULT_PREFS = {
@@ -128,13 +131,13 @@ def _load_prefs():
 
 def _save_prefs(prefs):
     try:
-        os.makedirs(os.path.dirname(PREF_FILE), exist_ok=True)
+        os.makedirs(os.path.dirname(PREF_FILE) or ".", exist_ok=True)
         tmp = PREF_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump(prefs, f)
         os.replace(tmp, PREF_FILE)
     except OSError:
-        pass
+        logger.exception("Could not save preferences to %s", PREF_FILE)
 
 
 @app.get("/")
@@ -350,7 +353,7 @@ def _loop():
         try:
             store.scan()
         except Exception:
-            pass
+            logger.exception("Log scan failed")
         time.sleep(REFRESH_SECONDS)
 
 

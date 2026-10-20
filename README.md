@@ -2,16 +2,15 @@
 
 [![CI](https://github.com/LoR3daN/npmplus-logviewer/actions/workflows/docker-image.yml/badge.svg)](https://github.com/LoR3daN/npmplus-logviewer/actions/workflows/docker-image.yml)
 [![GHCR](https://img.shields.io/badge/GHCR-lor3dan/npmplus--logviewer-2496ED?logo=docker&logoColor=white)](https://ghcr.io/lor3dan/npmplus-logviewer)
-[![Repository](https://img.shields.io/badge/repo-LoR3daN/npmplus--logviewer-181717?logo=github&logoColor=white)](https://github.com/LoR3daN/npmplus-logviewer)
+[![Repository](https://img.shields.io/badge/repo-LoR3daN/npmplus-logviewer-181717?logo=github&logoColor=white)](https://github.com/LoR3daN/npmplus-logviewer)
 
-A web application that **reads and visualizes the Nginx (NPMplus) access logs**
-of your reverse proxy: a filterable, sortable and paginated table, a request
-summary, and a live animated map of every request pointing to home.
+A FastAPI web app that reads the NPMplus access log and shows a filterable
+table, request summary and a live animated map.
 
-It parses `access.log` and its rotated files (`access.log.1`, `.2`, …), merges
-the **two log lines** NPMplus writes per request into a single record, cleans
-the noise (Uptime-Kuma healthchecks, local IPs, non-HTTP scanner garbage) and
-shows you what is actually happening in real time.
+The viewer reads **`access_detailed.log`**, a single-line log written by
+NPMplus. Each request contains host, IP, method, path, status, response time,
+bytes, user-agent and country. It does **not** read NPMplus's normal
+`access.log`, so CrowdSec and GoAccess can keep using it.
 
 ---
 
@@ -25,129 +24,105 @@ shows you what is actually happening in real time.
 |---|---|
 | ![2D map](docs/screenshots/map-2d.png) | ![3D globe](docs/screenshots/map-3d.png) |
 
-> The screenshots above use **sample, sanitized data** (masked IPs and
-> placeholder hostnames) — they are not real traffic.
+> Screenshots use sample, sanitized data (masked IPs and placeholder hostnames).
 
 ---
 
-## Contents
+## What you need
 
-- [Features](#features)
-- [Requirements](#requirements)
-- [Deploy](#deploy)
-  - [Expose it through a proxy host](#expose-it-through-a-proxy-host-optional)
-  - [Upgrade to a new version](#upgrade-to-a-new-version)
-- [Environment variables](#environment-variables)
-- [Supported log format](#supported-log-format)
-- [API](#api)
-  - [`GET /api/entries`](#get-apientries)
-  - [`GET /api/live`](#get-apilive)
+- Docker and Docker Compose.
+- NPMplus running with **`NGINX_LOAD_GEOIP2_MODULE=true`** and a GeoIP2
+  database.
+- The NPMplus logs available on the host at `/opt/npmplus/nginx/logs`.
+- The `access_detailed.log` format added to NPMplus (see below).
 
----
+The format below uses `$geoip2_country_iso_code`. If your NPMplus does not have
+the GeoIP2 module/database, replace that variable with `-` in the format. The
+viewer will still work, but the country column and map beams will be empty.
 
-## Features
+## Quick start
 
-### Request table
-
-- Columns: **Time**, **Host/service**, **IP**, **Method**, **Path**, **Status**,
-  **Country**, **Response time**, **Bytes** and **User-Agent**.
-- Click any column header to sort ascending / descending.
-- Pagination with configurable page size (25 / 50 / 100 / 200).
-
-### Filters
-
-- **Multi-select dropdowns** for Host, Status, Method and Country, each with its
-  own search box and an "All" option.
-- **IP** (contains) and free-text **Search** (matches path, User-Agent, host…).
-- **Date range** (`From` / `To`).
-- **Hide Uptime-Kuma** — drops the healthcheck noise.
-- **Hide local IPs** — hides private / loopback / link-local addresses.
-- **Clear filters** resets everything in one click.
-
-All active filters are **persisted on the server** (`/state/prefs.json`) and
-restored after a restart or a container upgrade.
-
-### Simplified view
-
-The **Simplified** toggle in the header collapses every *consecutive run* of
-requests from the **same IP to the same domain** into a single row (with a
-`×N` count badge), no matter the path or status.
-
-- Removes the **Method** filter, and hides the **Path**, **Response time** and
-  **Bytes** columns for a cleaner overview.
-- Also affects the **map**: one beam per run instead of one per request.
-
-### Request summary cards
-
-- Total requests plus the **2xx / 3xx / 4xx / 5xx** breakdown.
-- **Host chips** (clickable, multi-select): click one to filter by it, click
-  again to remove it; selected chips are highlighted.
-- Chips shown are the hosts declared in `CARDS_HOSTS` (or the top 6 otherwise),
-  **plus** the current server public IP as `IP`, `IP:80` and `IP:443` chips
-  (green), so you always see your own traffic on both ports.
-
-### Country flags
-
-Every country is shown as its code plus a flag (flagcdn images with an emoji
-fallback when the image cannot be loaded).
-
-### Live map
-
-A **Map / Table** toggle opens a full live map centered on the **server public
-IP** (resolved via an external IP-location API):
-
-- **2D map** (Leaflet) with a **Switch to 3D** button (globe.gl) — same data,
-  two views.
-- Each request is animated as a **beam from its country to home**; origin
-  pulses at the start.
-- **Live feed** panel with the most recent requests.
-- **Mini stats** panel: total / distinct countries / distinct IPs, status
-  distribution, request rate (**requests per hour**), a rate sparkline, top
-  origins and top IPs.
-- **Apply table filters ON/OFF** — decide whether the map honors the current
-  table filters or shows everything.
-- The map history **persists** while you switch back and forth to the table; the
-  **feed starts fresh** each time you open the map (only new requests).
-- On mobile the app opens directly in map view, showing just the map.
-
-### Robust log parsing
-
-- NPMplus writes two lines per request; they are merged by
-  `date + IP + request + status + body`.
-- The **method** field only keeps real HTTP methods — TLS/SSH/SMB handshakes and
-  other binary scanner payloads are stored as `-` instead of polluting the
-  filter and table.
-
-### Live mode
-
-- Auto-refresh every 5 seconds (toggleable) and a **manual rescan** button (↻)
-  to force a re-read of the log files immediately.
+1. Enable `NGINX_LOAD_GEOIP2_MODULE=true` and make the GeoIP2 database available.
+2. Add the `geoip_detailed` format to NPMplus `custom_nginx/http.conf`.
+3. Run `nginx -t` and `nginx -s reload` inside the NPMplus container.
+4. Deploy the viewer with `/opt/npmplus/nginx/logs:/logs:ro`.
+5. Open <http://localhost:8899> and protect it with an Access List.
 
 ---
 
-## Requirements
+## NPMplus setup
 
-- A machine with **Docker** and **Docker Compose** (for example, the NPMplus
-  host itself).
-- Access to the NPMplus logs. In the default setup these live on the host at
-  `/opt/npmplus/nginx/logs` and contain `access.log*`.
+### 1. Enable the GeoIP2 module
 
----
+In your NPMplus compose file:
 
-## Deploy
-
-The image is built and published automatically to
-`ghcr.io/lor3dan/npmplus-logviewer` on every push to `main`.
-
-A ready-to-use [`docker-compose.yml`](docker-compose.yml) is included in the
-repository. You can either copy the service into the compose file of your
-existing NPMplus project, or deploy it standalone:
-
-```bash
-docker compose up -d
+```yaml
+services:
+  npmplus:
+    environment:
+      - "TZ=Europe/Madrid"
+      - "LOGROTATE=true"
+      - "LOGROTATIONS=30"
+      - "NGINX_LOAD_GEOIP2_MODULE=true"
+      # Optional: disable GoAccess. Keep LOGROTATE=true for rotation/CrowdSec.
+      - "GOA=false"
+    volumes:
+      - "/opt/npmplus:/data"
+      - "/opt/npmplus/goaccess/geoip:/etc/nginx/geoip"
 ```
 
-The service (`docker-compose.yml`):
+- `LOGROTATE=true` keeps NPMplus writing and rotating `access.log`,
+  `access_detailed.log`, `error.log` and `stream.log`.
+- `LOGROTATIONS` is how many daily rotations are kept. Use 7, 14 or 30
+  depending on your disk.
+- `NGINX_LOAD_GEOIP2_MODULE=true` is required for the country code.
+- `GOA` is optional. If you use GoAccess, leave it at `true`; if you do not,
+  `GOA=false` is fine, but keep `LOGROTATE=true`.
+
+The GeoIP database is read from `/opt/npmplus/goaccess/geoip` and mounted into
+NPMplus as `/etc/nginx/geoip`. You can fill it with the `geoipupdate` container
+or by placing the MaxMind files there manually.
+
+### 2. Add the detailed log format
+
+Edit `/opt/npmplus/custom_nginx/http.conf` on the host and add:
+
+```nginx
+log_format geoip_detailed '[$time_local] $host$is_request_port$request_port $remote_addr $request_time "$request" $status $body_bytes_sent $bytes_sent "$http_referer" "$http_user_agent" [$geoip2_country_iso_code]';
+
+access_log /data/nginx/logs/access_detailed.log geoip_detailed;
+```
+
+Do not remove `access.log`: CrowdSec, GoAccess or other tools may still use it.
+The viewer only reads `access_detailed.log`.
+
+Validate and reload Nginx:
+
+```bash
+docker exec npmplus nginx -t
+docker exec npmplus nginx -s reload
+```
+
+Check that the file is being written:
+
+```bash
+tail -n 2 /opt/npmplus/nginx/logs/access_detailed.log
+```
+
+It should look like this:
+
+```text
+[14/Aug/2026:21:54:55 +0200] cloud.example.com 203.0.113.10 0.000 "GET / HTTP/2.0" 302 116 366 "-" "Mozilla/5.0 (...)" [ES]
+```
+
+If you see old two-line entries in the file, ignore them: the viewer skips
+them and they disappear when the file rotates.
+
+---
+
+## Deploy the viewer
+
+Add this service to the same Compose file as NPMplus, or run it standalone:
 
 ```yaml
 services:
@@ -158,34 +133,39 @@ services:
     network_mode: host
     environment:
       - "TZ=Europe/Madrid"
-      # Optional: hosts to show as chips on the Requests card (comma separated).
-      # Empty = top 6 hosts automatically.
-      # - "CARDS_HOSTS=cloud.example.com,jellyfin.example.com,immich.example.com"
-      # Optional: force a public IP for the "my IP" chips.
-      # Empty = detected automatically (external API) and refreshed periodically.
-      # - "MY_IP=<your_public_ip>"
+      # Optional: hosts shown as chips. Empty = top 6.
+      # - "CARDS_HOSTS=cloud.example.com,jellyfin.example.com"
+      # Optional: force the server public IP.
+      # - "MY_IP=203.0.113.10"
+      # Optional: CARTO basemaps API key for the 2D map.
+      # - "CARTO_KEY=your_key"
     volumes:
-      # NPMplus logs on the host (read only).
       - "/opt/npmplus/nginx/logs:/logs:ro"
-      # Writable volume so the filters survive container restarts.
       - "logviewer-state:/state"
 
 volumes:
   logviewer-state:
 ```
 
-Web: <http://localhost:8899>
+```bash
+docker compose up -d
+```
 
-### Expose it through a proxy host (optional)
+Open <http://localhost:8899>.
 
-The web app has **no built-in login**. If you expose it through a domain, add an
-**Access List** (or Basic Auth) on the NPMplus proxy host:
+The mount is read-only. The viewer does not need write access to the logs and
+does not modify NPMplus.
+
+### Expose it through NPMplus
+
+The app has **no built-in login**. If you expose it through a domain, add an
+NPMplus **Access List** or Basic Auth to the proxy host:
 
 - Domain: `logs.yourdomain.com`
 - Forward hostname/IP: `127.0.0.1`
 - Forward port: `8899`
 
-### Upgrade to a new version
+### Upgrade
 
 ```bash
 docker compose pull && docker compose up -d
@@ -193,76 +173,178 @@ docker compose pull && docker compose up -d
 
 ---
 
-## Environment variables
+## How the log rotation works
 
-| Variable            | Default          | Description                                                        |
-|---------------------|------------------|--------------------------------------------------------------------|
-| `LOG_DIR`           | `/logs`          | Folder that contains the `access.log*` files                       |
-| `REFRESH_SECONDS`   | `5`              | Log rescan interval                                                |
-| `TZ`                | `Europe/Madrid`  | Timezone used by the date filters                                  |
-| `PREF_FILE`         | `/state/prefs.json` | File where the filters are persisted                            |
-| `CARDS_HOSTS`       | *(empty)*        | Hosts to show as chips on the Requests card (comma separated)      |
-| `MY_IP`             | *(empty)*        | Override the server public IP used for the "my IP" chips           |
-| `PUBLIC_IP_REFRESH` | `600`            | How often (seconds) to re-check the public IP via an external API  |
-| `CARTO_KEY`         | *(empty)*        | Optional CARTO Basemaps API key for the 2D map tiles (no watermark) |
+NPMplus rotates every `*.log` file in `/data/nginx/logs` daily using
+`copytruncate`:
 
-> **Public IP detection.** When `MY_IP` is empty the app asks a *what-is-my-IP*
-> API (ipify, then ifconfig.me, then ipinfo.io) every `PUBLIC_IP_REFRESH`
-> seconds and caches the result, so the `IP` / `IP:80` / `IP:443` chips follow
-> **dynamic public IPs** automatically. If the API is unreachable it falls back
-> to the IP seen in the logs, the request `Host` header, or forwarded client IPs.
+- The active `access_detailed.log` is copied to `.1` and then truncated.
+- Older files become `.2`, `.3`, ...
+- Files beyond `LOGROTATIONS` are deleted.
+- No compression is applied by NPMplus. The viewer ignores `.gz` rotations if
+  you enable compression yourself.
+- `access_detailed.log` roughly doubles log disk usage because `access.log` is
+  still written for CrowdSec/GoAccess.
+
+The viewer reads `access_detailed.log`, `.1`, `.2`... and handles truncation
+and incomplete lines. You do not need a separate logrotate configuration.
+
+Do **not** disable log rotation to "simplify" things. If you set
+`LOGROTATE=false`, NPMplus stops writing `access.log` and CrowdSec/GoAccess lose
+their data; `access_detailed.log` may still grow without rotation. If you only
+stop the rotation process, the files grow until the disk is full.
 
 ---
 
-## Supported log format
+## Environment variables
 
-Each request generates two lines that the viewer merges into one:
+| Variable | Default | Description |
+|---|---|---|
+| `LOG_DIR` | `/logs` | Folder containing `access_detailed.log*` |
+| `REFRESH_SECONDS` | `5` | Log rescan interval |
+| `TZ` | `Europe/Madrid` | Timezone used by the date filters |
+| `PREF_FILE` | `/state/prefs.json` | Saved filters |
+| `CARDS_HOSTS` | *(empty)* | Hosts shown as chips, comma separated |
+| `MY_IP` | *(empty)* | Override the server public IP |
+| `PUBLIC_IP_REFRESH` | `600` | Seconds between public-IP checks |
+| `CARTO_KEY` | *(empty)* | Optional CARTO basemaps API key |
 
-- **With host/service:**
-  `[14/Aug/2026:21:54:55 +0200] web.example.com X.X.X.X 0.022 "GET / HTTP/2.0" 200 437 782 - Uptime-Kuma/2.5.0`
-- **Standard + country:**
-  `X.X.X.X - - [14/Aug/2026:21:54:55 +0200] "GET / HTTP/2.0" 200 437 "-" "Uptime-Kuma/2.5.0" [ES]`
+If `MY_IP` is empty, the app asks an external what-is-my-IP API and refreshes the
+result every `PUBLIC_IP_REFRESH` seconds. If the API is unreachable, it falls back
+to the logs, the request `Host` header or forwarded client IPs.
 
-The country (`ES`, `US`, … or `-`) is always taken from the last bracketed
-field. Rotated files are handled without duplicates (tracked by inode + size).
-On startup the viewer does a full read; afterwards it only reads the new bytes
-of each file.
+If you use Cloudflare, set `TRUST_CLOUDFLARE=true` in NPMplus so `$remote_addr`
+is the real client IP and not a Cloudflare address.
+
+---
+
+## Features
+
+- **Request table** with time, host, IP, method, path, status, country, response
+  time, bytes and user-agent. Sort any column and choose 25/50/100/200 rows per
+  page.
+- **Filters** for host, status, method and country (multi-select), IP, free-text
+  search, date range, hide Uptime-Kuma and hide local IPs. Filters are saved on
+  the server and restored after a restart.
+- **Simplified view** collapses consecutive requests from the same IP and host
+  into one row with a `×N` badge.
+- **Summary cards** with total requests, 2xx/3xx/4xx/5xx breakdown and host
+  chips. The server public IP is shown as `IP`, `IP:80` and `IP:443` chips.
+- **Live map** with Leaflet 2D and globe.gl 3D: animated beams from each country
+  to the server, a live feed and mini statistics.
+- **Live mode** refreshes every 5 seconds and has a manual rescan button.
+- **Robust reading**: handles log rotation, truncation and lines that are being
+  written.
+
+---
+
+## Troubleshooting
+
+### The viewer shows no data
+
+Check that NPMplus is writing the file:
+
+```bash
+tail -f /opt/npmplus/nginx/logs/access_detailed.log
+```
+
+Check that the viewer sees the same directory:
+
+```bash
+docker exec logviewer ls -la /logs
+```
+
+Check the mount in the viewer Compose file:
+
+```yaml
+volumes:
+  - "/opt/npmplus/nginx/logs:/logs:ro"
+```
+
+If the file exists but the viewer does not see it, the host path or the mount is
+wrong.
+
+### Nginx fails after editing `http.conf`
+
+Run:
+
+```bash
+nl -ba /opt/npmplus/custom_nginx/http.conf
+docker exec npmplus nginx -t
+```
+
+Look for a stray word, a missing semicolon or a duplicated `access_log` line.
+The file must contain the two lines from the setup section, with
+`log_format` before `access_log`.
+
+### The country column is empty
+
+Check the GeoIP2 module and database:
+
+```bash
+docker exec npmplus env | grep NGINX_LOAD_GEOIP2_MODULE
+docker exec npmplus ls -la /etc/nginx/geoip
+```
+
+You need `NGINX_LOAD_GEOIP2_MODULE=true` and a
+`GeoLite2-Country.mmdb` in that directory. The `geoipupdate` container can keep
+it updated.
+
+Local IPs such as `127.0.0.1` or `192.168.x.x` normally have no country. That is
+expected.
+
+### The map has no beams
+
+The map only draws requests with a known country. Local traffic and unknown
+GeoIP results are skipped. Check that public requests show a country in the
+table.
+
+### Old lines do not have host or response time
+
+They are entries from the previous two-line format. The viewer ignores them.
+They disappear when `access_detailed.log` rotates or when you truncate it:
+
+```bash
+truncate -s 0 /opt/npmplus/nginx/logs/access_detailed.log
+```
+
+### The public IP is wrong
+
+Set `MY_IP` in the viewer environment. If NPMplus is behind Cloudflare, set
+`TRUST_CLOUDFLARE=true` in NPMplus to log the real client IP.
 
 ---
 
 ## API
 
 | Endpoint | Description |
-|----------|-------------|
-| `GET /api/stats` | Totals, status/host/method/country facets, configured chips and "my IP" hosts |
+|---|---|
+| `GET /api/stats` | Totals, status/host/method/country facets, chips and parse errors |
 | `GET /api/entries` | Filtered, sorted and paginated table rows |
-| `GET /api/live` | Recent requests with country coordinates for the map |
-| `GET /api/home` | Public IP location (lat / lon / city / country) for the map home |
-| `GET /api/prefs` | Current saved filters |
+| `GET /api/live` | Recent requests with coordinates for the map |
+| `GET /api/home` | Public IP location for the map center |
+| `GET /api/config` | Frontend configuration (CARTO key) |
+| `GET /api/prefs` | Saved filters |
 | `POST /api/prefs` | Save filters |
 | `POST /api/reload` | Rescan the log files now |
 
-### `GET /api/entries`
+`GET /api/entries` parameters:
 
-Parameters:
+- `host`, `status`, `method`, `country`: comma-separated values. `status`
+  accepts `2xx`/`3xx`/`4xx`/`5xx`.
+- `ip`, `q`: contains filters for IP and free text.
+- `exclude_ua`, `exclude_local`: hide user agents or local IPs.
+- `from`, `to`: ISO date range in local time.
+- `collapse`: simplified view.
+- `sort`: `ts`, `host`, `ip`, `method`, `path`, `status`, `country`, `time`,
+  `bytes` or `ua`; `order`: `asc` or `desc`.
+- `page`, `size`.
 
-`host`, `status`, `method`, `country` — comma-separated multi-select values
-(`2xx`/`3xx`/`4xx`/`5xx` buckets are supported for `status`).
+`GET /api/live` accepts the same filters plus `after` (epoch cursor) and `limit`.
 
-`ip`, `q` — contains filters for the IP and a free-text search.
+---
 
-`exclude_ua` — comma-separated User-Agent substrings to hide (e.g. `Uptime-Kuma`).
+## Security
 
-`exclude_local` — `true` to hide private/loopback/link-local IPs.
-
-`from`, `to` — ISO date range (local timezone).
-
-`collapse` — `true` for the simplified view (collapse consecutive same IP+domain runs).
-
-`sort` (`ts`|`status`|`time`|`body`), `order` (`asc`|`desc`), `page`, `size`.
-
-### `GET /api/live`
-
-Same filters as `/api/entries`, plus `after` (epoch, incremental polling) and
-`limit`. Returns items with `lat`/`lon`/`cc` resolved from the country centroid,
-used by the map beams.
+There is no authentication. If the viewer is reachable from the internet, put it
+behind an NPMplus Access List or Basic Auth. Do not expose port `8899` directly.
